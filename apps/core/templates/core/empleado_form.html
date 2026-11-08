@@ -36,9 +36,14 @@
 
             <div class="d-flex justify-content-between mt-4">
                 <a href="{% url 'core:empleado_lista' %}" class="btn btn-secondary">Cancelar</a>
-                <button type="submit" class="btn btn-primary">
-                    {% if object.pk %}Guardar Cambios{% else %}Crear Empleado{% endif %}
-                </button>
+                <div class="d-flex gap-2">
+                    {% if object.pk %}
+                        <a href="{% url 'core:empleado_restablecer_credenciales' object.pk %}" class="btn btn-warning">Restablecer credenciales</a>
+                    {% endif %}
+                    <button type="submit" class="btn btn-primary">
+                        {% if object.pk %}Guardar Cambios{% else %}Crear Empleado{% endif %}
+                    </button>
+                </div>
             </div>
         </form>
     </div>

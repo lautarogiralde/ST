@@ -3,13 +3,19 @@ from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMix
 from django.contrib.auth.views import LoginView
 from django.contrib.messages.views import SuccessMessageMixin
 from django.core.exceptions import ObjectDoesNotExist
-from django.shortcuts import get_object_or_404, redirect
+from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
 from django.utils import timezone
 from django.views import View
 from django.views.generic import CreateView, ListView, TemplateView, UpdateView
 
-from .forms import EmpleadoCreateForm, EmpleadoUpdateForm, LoginForm, VehiculoForm
+from .forms import (
+    EmpleadoCreateForm,
+    EmpleadoUpdateForm,
+    LoginForm,
+    RestablecerCredencialesForm,
+    VehiculoForm,
+)
 from .models import Usuario, Vehiculo
 
 # Create your views here.
@@ -125,6 +131,37 @@ class SuspenderEmpleado(LoginRequiredMixin, PermissionRequiredMixin, View):
         empleado.is_active = False
         empleado.save(update_fields=["is_active"])
         messages.success(request, "Cuenta del empleado deshabilitada.")
+        return redirect("core:empleado_lista")
+
+
+class RestablecerCredencialesEmpleado(LoginRequiredMixin, PermissionRequiredMixin, View):
+    permission_required = "core.change_usuario"
+
+    def get(self, request, pk):
+        empleado = get_object_or_404(Usuario, pk=pk)
+        form = RestablecerCredencialesForm(user=empleado)
+        return render(
+            request,
+            "core/empleado_reset_password.html",
+            {"empleado": empleado, "form": form},
+        )
+
+    def post(self, request, pk):
+        empleado = get_object_or_404(Usuario, pk=pk)
+        form = RestablecerCredencialesForm(request.POST, user=empleado)
+
+        if not form.is_valid():
+            return render(
+                request,
+                "core/empleado_reset_password.html",
+                {"empleado": empleado, "form": form},
+            )
+
+        empleado.set_password(form.cleaned_data["password"])
+        empleado.is_active = True
+        empleado.save(update_fields=["password", "is_active"])
+
+        messages.success(request, "Credenciales restablecidas correctamente.")
         return redirect("core:empleado_lista")
 
 

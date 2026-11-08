@@ -47,6 +47,7 @@
                     </td>
                     <td class="text-end pe-3">
                         <a href="{% url 'core:empleado_editar' emp.pk %}" class="btn btn-sm btn-outline-primary">Editar</a>
+                        <a href="{% url 'core:empleado_restablecer_credenciales' emp.pk %}" class="btn btn-sm btn-outline-warning">Restablecer credenciales</a>
 
                         {% if emp.is_active %}
                         <form method="post" action="{% url 'core:empleado_suspender' emp.pk %}" class="d-inline">
