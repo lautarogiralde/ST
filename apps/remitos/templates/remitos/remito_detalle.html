@@ -56,6 +56,16 @@
                         <span class="remito-kv-label">Monto a cobrar</span>
                         <span class="remito-kv-value fw-bold">${{ remito.total|floatformat:2 }}</span>
                     </div>
+                    <div class="remito-kv-item">
+                        <span class="remito-kv-label">Fecha de entrega</span>
+                        <span class="remito-kv-value">
+                            {% if remito.fecha_entrega %}
+                                {{ remito.fecha_entrega|date:"d/m/Y" }}
+                            {% else %}
+                                —
+                            {% endif %}
+                        </span>
+                    </div>
                 </div>
             </section>
 

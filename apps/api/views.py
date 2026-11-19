@@ -15,6 +15,7 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.views import TokenObtainPairView
 
 from apps.api.serializers import (
+    CrearRutaGuardadaSerializer,
     CustomTokenObtainPairSerializer,
     DetalleParadaSerializer,
     EvidenciaParadaSerializer,
@@ -39,12 +40,6 @@ from apps.itinerarios.models import (
 )
 from apps.itinerarios.services import ordenar_itinerario_segun_ruta
 from apps.remitos.models import EstadoRemito, Remito
-
-from .serializers import (
-    CrearRutaGuardadaSerializer,
-    DetalleParadaSerializer,
-    RegistrarPagoInputSerializer,
-)
 
 User = get_user_model()
 sdk = mercadopago.SDK(settings.MERCADO_PAGO_ACCESS_TOKEN)
@@ -80,7 +75,8 @@ class ItinerarioViewSet(viewsets.ReadOnlyModelViewSet):
 
     def _get_itinerario_activo(self, request):
         """
-        Recupera el itinerario en curso o asignado al transportista autenticado.
+        Recupera el itinerario en curso del transportista autenticado.
+        Solo se considera activo si ya fue iniciado (estado EN_CURSO) y corresponde a la fecha de hoy.
         """
         user = request.user
         if not hasattr(user, "perfil_transportista"):
@@ -90,19 +86,82 @@ class ItinerarioViewSet(viewsets.ReadOnlyModelViewSet):
                 }
             )
 
-        itinerario = Itinerario.objects.filter(
-            transportista=user.perfil_transportista,
-            estado__in=[EstadoItinerario.ASIGNADO],
-        ).first()
-
-        if not itinerario:
+        hoy = timezone.localdate()
+        try:
+            itinerario = Itinerario.objects.get(
+                transportista=user.perfil_transportista,
+                fecha=hoy,
+                estado=EstadoItinerario.EN_CURSO,
+            )
+        except Itinerario.DoesNotExist:
             raise ValidationError(
                 {
-                    "detail": "No posees ningún itinerario activo o asignado en este momento."
+                    "detail": "No posees ningún itinerario en curso en este momento."
                 }
             )
 
         return itinerario
+
+    @action(detail=False, methods=["post"], url_path="iniciar")
+    def iniciar(self, request):
+        """
+        Inicia el itinerario asignado del transportista autenticado para el día de hoy.
+        Endpoint: POST /api/itinerarios/iniciar/
+        """
+        user = request.user
+        if not hasattr(user, "perfil_transportista"):
+            raise ValidationError(
+                {
+                    "detail": "El usuario autenticado no tiene asignado un perfil de transportista."
+                }
+            )
+
+        transportista = user.perfil_transportista
+        hoy = timezone.localdate()
+
+        # Verificar si ya tiene uno en curso hoy
+        try:
+            en_curso = Itinerario.objects.get(
+                transportista=transportista,
+                fecha=hoy,
+                estado=EstadoItinerario.EN_CURSO,
+            )
+            return Response(
+                {
+                    "mensaje": "El itinerario ya se encuentra en curso.",
+                    "itinerario_id": en_curso.id,
+                    "estado": en_curso.estado,
+                },
+                status=status.HTTP_200_OK,
+            )
+        except Itinerario.DoesNotExist:
+            pass
+
+        # Buscar el asignado para hoy e iniciarlo
+        try:
+            itinerario = Itinerario.objects.get(
+                transportista=transportista,
+                fecha=hoy,
+                estado=EstadoItinerario.ASIGNADO,
+            )
+        except Itinerario.DoesNotExist:
+            raise ValidationError(
+                {
+                    "detail": "No posees ningún itinerario asignado para iniciar."
+                }
+            )
+
+        itinerario.estado = EstadoItinerario.EN_CURSO
+        itinerario.save(update_fields=["estado"])
+
+        return Response(
+            {
+                "mensaje": "Itinerario iniciado correctamente.",
+                "itinerario_id": itinerario.id,
+                "estado": itinerario.estado,
+            },
+            status=status.HTTP_200_OK,
+        )
 
     @action(detail=False, methods=["get"], url_path="paradas")
     def paradas(self, request):

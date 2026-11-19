@@ -116,6 +116,19 @@
                         <div class="remitos-field-help">Ingresá el importe total del remito.</div>
                     {% endif %}
                 </div>
+
+                <!-- Fecha de entrega -->
+                <div class="col-md-6">
+                    <label for="{{ form.fecha_entrega.id_for_label }}" class="text-label text-c-primary mb-1 d-block">
+                        Fecha de entrega
+                    </label>
+                    {{ form.fecha_entrega }}
+                    {% if form.fecha_entrega.errors %}
+                        <div class="invalid-feedback d-block small">{{ form.fecha_entrega.errors.0 }}</div>
+                    {% else %}
+                        <div class="remitos-field-help">Fecha pactada para la entrega del remito.</div>
+                    {% endif %}
+                </div>
             </div>
 
             <!-- Botón Guardar alineado a la derecha como en Figma -->

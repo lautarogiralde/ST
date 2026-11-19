@@ -103,6 +103,11 @@ class Remito(models.Model):
     estado = models.CharField(
         max_length=20, choices=EstadoRemito.choices, default=EstadoRemito.PENDIENTE
     )
+    fecha_entrega = models.DateField(
+        help_text="Fecha pactada o estimada de entrega",
+        null=True,
+        blank=True,
+    )
     parada = models.ForeignKey(
         "itinerarios.Parada",
         on_delete=models.SET_NULL,

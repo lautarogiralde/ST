@@ -81,6 +81,13 @@ class Itinerario(models.Model):
         verbose_name = "Itinerario"
         verbose_name_plural = "Itinerarios"
         ordering = ("-fecha",)
+        constraints = [
+            models.UniqueConstraint(
+                fields=["transportista", "fecha"],
+                condition=models.Q(transportista__isnull=False),
+                name="unique_itinerario_transportista_fecha",
+            )
+        ]
 
     def __str__(self):
         transportista = (

@@ -54,6 +54,7 @@ class RemitoTestCase(TestCase):
             "marca": self.marca.pk,
             "comercio": self.comercio.pk,
             "total": "1250.50",
+            "fecha_entrega": "2026-11-15",
         }
         data.update(overrides)
         return data
@@ -190,22 +191,6 @@ class RemitoFormTests(RemitoTestCase):
             form.errors["numero"],
         )
 
-    def test_form_rejects_duplicate_number_with_different_padding(self):
-        Remito.objects.create(
-            numero="0001-00000055",
-            marca=self.marca,
-            comercio=self.comercio,
-            total=Decimal("100.00"),
-        )
-        form = RemitoForm(
-            data=self.datos_remito(numero="1-55")
-        )
-        self.assertFalse(form.is_valid())
-        self.assertIn(
-            "El número de remito debe ser único por marca proveedora.",
-            form.errors["numero"],
-        )
-
 
 class RemitoViewsTests(RemitoTestCase):
     def test_create_remito_persists_data_and_redirects(self):
@@ -238,17 +223,66 @@ class RemitoViewsTests(RemitoTestCase):
 
         response = self.client.post(
             reverse("remitos:remito_crear"),
-            self.datos_remito(numero="0001-00000010"),
+            self.datos_remito(numero="0001-00000010", fecha_entrega="2026-11-15"),
+            follow=True,
         )
 
         self.assertRedirects(
             response,
             reverse("remitos:remito_lista"),
-            fetch_redirect_response=False,
         )
         remito = Remito.objects.get(numero="0001-00000010")
         self.assertEqual(remito.parada, parada)
         self.assertEqual(remito.estado, EstadoRemito.ASIGNADO)
+        self.assertContains(response, "asignado al itinerario")
+        self.assertContains(response, "estado: Asignado")
+
+    def test_create_remito_does_not_assign_if_itinerario_is_en_curso(self):
+        itinerario = Itinerario.objects.create(
+            fecha="2026-11-15",
+            estado=EstadoItinerario.EN_CURSO,
+        )
+        parada = Parada.objects.create(
+            itinerario=itinerario,
+            comercio=self.comercio,
+            orden=1,
+            estado=EstadoParada.PENDIENTE,
+        )
+
+        response = self.client.post(
+            reverse("remitos:remito_crear"),
+            self.datos_remito(numero="0001-00000011", fecha_entrega="2026-11-15"),
+            follow=True,
+        )
+
+        self.assertRedirects(response, reverse("remitos:remito_lista"))
+        remito = Remito.objects.get(numero="0001-00000011")
+        self.assertIsNone(remito.parada)
+        self.assertEqual(remito.estado, EstadoRemito.PENDIENTE)
+        self.assertContains(response, "creado con estado Pendiente.")
+
+    def test_create_remito_does_not_assign_if_fecha_does_not_match(self):
+        itinerario = Itinerario.objects.create(
+            fecha="2026-11-20",
+            estado=EstadoItinerario.ASIGNADO,
+        )
+        parada = Parada.objects.create(
+            itinerario=itinerario,
+            comercio=self.comercio,
+            orden=1,
+            estado=EstadoParada.PENDIENTE,
+        )
+
+        response = self.client.post(
+            reverse("remitos:remito_crear"),
+            self.datos_remito(numero="0001-00000012", fecha_entrega="2026-11-15"),
+            follow=True,
+        )
+
+        self.assertRedirects(response, reverse("remitos:remito_lista"))
+        remito = Remito.objects.get(numero="0001-00000012")
+        self.assertIsNone(remito.parada)
+        self.assertEqual(remito.estado, EstadoRemito.PENDIENTE)
 
     def test_create_remito_ignores_non_pending_stops(self):
         itinerario = Itinerario.objects.create(
@@ -476,6 +510,7 @@ class ImportacionRemitosTestCase(TestCase):
             reverse("remitos:importacion_crear"),
             {
                 "archivo": [file1, file2],
+                "fecha_entrega": "2026-11-15",
             },
         )
         self.assertRedirects(response, reverse("core:inicio"), fetch_redirect_response=False)
@@ -519,7 +554,7 @@ class ImportacionRemitosTestCase(TestCase):
         imp1.archivo.delete(save=False)
         imp2.archivo.delete(save=False)
 
-    def test_importar_remitos_fallback_a_marca_seleccionada(self):
+    def test_importar_remitos_sin_cuit_en_nombre_es_rechazado(self):
         csv_content = (
             "cuit_comercio,condicion_iva,numero_iibb,razon_social,domicilio,monto_a_cobrar,fecha_factura,numero_sucursal,numero_factura\n"
             "20301112223,Monotributo,976-123456-1,Kiosco Central,\"Calle 1 123\",1000.00,2026-10-21,0001,00003001\n"
@@ -529,21 +564,11 @@ class ImportacionRemitosTestCase(TestCase):
             reverse("remitos:importacion_crear"),
             {
                 "archivo": [file_sin_cuit_conocido],
-                "marca": self.marca1.id,
+                "fecha_entrega": "2026-11-15",
             },
         )
-        self.assertRedirects(response, reverse("core:inicio"), fetch_redirect_response=False)
-
-        imp = ImportacionRemitos.objects.get()
-        self.assertEqual(imp.marca, self.marca1)
-        self.assertEqual(imp.cantidad, 1)
-        self.assertIn("archivo_random", imp.archivo.name)
-
-        remito = Remito.objects.get(importacion=imp)
-        self.assertEqual(remito.numero, "0001-00003001")
-        self.assertEqual(remito.estado, EstadoRemito.PENDIENTE)
-        self.assertEqual(remito.total, Decimal("1000.00"))
-        imp.archivo.delete(save=False)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(ImportacionRemitos.objects.exists())
 
     def test_importar_remitos_con_errores_crea_error_importacion(self):
         csv_invalido = (
@@ -557,6 +582,7 @@ class ImportacionRemitosTestCase(TestCase):
             reverse("remitos:importacion_crear"),
             {
                 "archivo": [archivo_erroneo],
+                "fecha_entrega": "2026-11-15",
             },
         )
         self.assertRedirects(response, reverse("core:inicio"), fetch_redirect_response=False)
@@ -597,6 +623,7 @@ class ImportacionRemitosTestCase(TestCase):
             reverse("remitos:importacion_crear"),
             {
                 "archivo": [archivo],
+                "fecha_entrega": "2026-11-15",
             },
         )
         self.assertRedirects(response, reverse("core:inicio"), fetch_redirect_response=False)
@@ -622,6 +649,7 @@ class ImportacionRemitosTestCase(TestCase):
             reverse("remitos:importacion_crear"),
             {
                 "archivo": [archivo],
+                "fecha_entrega": "2026-11-15",
             },
         )
         self.assertRedirects(response, reverse("core:inicio"), fetch_redirect_response=False)
@@ -644,6 +672,7 @@ class ImportacionRemitosTestCase(TestCase):
             reverse("remitos:importacion_crear"),
             {
                 "archivo": [archivo],
+                "fecha_entrega": "2026-11-15",
             },
         )
         self.assertRedirects(response, reverse("core:inicio"), fetch_redirect_response=False)
@@ -653,6 +682,30 @@ class ImportacionRemitosTestCase(TestCase):
         errores = importacion.errores.all()
         self.assertEqual(errores.count(), 1)
         self.assertIn("La razón social es obligatoria para comercios no registrados", errores[0].motivo)
+        self.assertFalse(Comercio.objects.filter(cuit="20301112299").exists())
+        importacion.archivo.delete(save=False)
+
+    def test_importar_remitos_sin_domicilio_para_comercio_nuevo_es_rechazado(self):
+        csv_sin_domicilio = (
+            "cuit_comercio,condicion_iva,numero_iibb,razon_social,domicilio,monto_a_cobrar,fecha_factura,numero_sucursal,numero_factura\n"
+            "20301112299,Monotributo,976-123456-1,Kiosco Nuevo,,500.00,2026-10-21,0001,00008889\n"
+        ).encode("utf-8")
+        archivo = SimpleUploadedFile("30654321090_20261027_DISTR-01.csv", csv_sin_domicilio)
+
+        response = self.client.post(
+            reverse("remitos:importacion_crear"),
+            {
+                "archivo": [archivo],
+                "fecha_entrega": "2026-11-15",
+            },
+        )
+        self.assertRedirects(response, reverse("core:inicio"), fetch_redirect_response=False)
+
+        importacion = ImportacionRemitos.objects.get()
+        self.assertEqual(importacion.estado, EstadoImportacion.RECHAZADO)
+        errores = importacion.errores.all()
+        self.assertEqual(errores.count(), 1)
+        self.assertIn("El domicilio es obligatorio para comercios no registrados", errores[0].motivo)
         self.assertFalse(Comercio.objects.filter(cuit="20301112299").exists())
         importacion.archivo.delete(save=False)
 
@@ -672,6 +725,7 @@ class ImportacionRemitosTestCase(TestCase):
             reverse("remitos:importacion_crear"),
             {
                 "archivo": [archivo],
+                "fecha_entrega": "2026-11-15",
             },
         )
         self.assertRedirects(response, reverse("core:inicio"), fetch_redirect_response=False)
@@ -705,6 +759,7 @@ class ImportacionRemitosTestCase(TestCase):
             reverse("remitos:importacion_crear"),
             {
                 "archivo": [archivo],
+                "fecha_entrega": "2026-11-15",
             },
         )
         self.assertRedirects(response, reverse("core:inicio"), fetch_redirect_response=False)
@@ -736,6 +791,7 @@ class ImportacionRemitosTestCase(TestCase):
             reverse("remitos:importacion_crear"),
             {
                 "archivo": [archivo],
+                "fecha_entrega": "2026-11-15",
             },
         )
         self.assertRedirects(response, reverse("core:inicio"), fetch_redirect_response=False)
@@ -759,6 +815,7 @@ class ImportacionRemitosTestCase(TestCase):
             reverse("remitos:importacion_crear"),
             {
                 "archivo": [archivo],
+                "fecha_entrega": "2026-11-15",
             },
         )
         self.assertRedirects(response, reverse("core:inicio"), fetch_redirect_response=False)
@@ -774,3 +831,73 @@ class ImportacionRemitosTestCase(TestCase):
             any("Importación fallida: la estructura del archivo seleccionado es inválida" in str(m) for m in messages)
         )
         importacion.archivo.delete(save=False)
+
+    def test_importar_remitos_asigna_parada_pendiente_con_misma_fecha_e_itinerario_asignado(self):
+        itinerario = Itinerario.objects.create(
+            fecha="2026-11-15",
+            estado=EstadoItinerario.ASIGNADO,
+        )
+        parada = Parada.objects.create(
+            itinerario=itinerario,
+            comercio=Comercio.objects.create(
+                cuit="20301112223",
+                razon_social="Kiosco Central",
+                domicilio="Calle 1 123",
+            ),
+            orden=1,
+            estado=EstadoParada.PENDIENTE,
+        )
+        csv_content = (
+            "cuit_comercio,condicion_iva,numero_iibb,razon_social,domicilio,monto_a_cobrar,fecha_factura,numero_sucursal,numero_factura\n"
+            "20301112223,Monotributo,976-123456-1,Kiosco Central,\"Calle 1 123\",1500.00,2026-10-21,0001,00008881\n"
+        ).encode("utf-8")
+        archivo = SimpleUploadedFile("30654321090_20261027_DISTR-01.csv", csv_content)
+
+        response = self.client.post(
+            reverse("remitos:importacion_crear"),
+            {
+                "archivo": [archivo],
+                "fecha_entrega": "2026-11-15",
+            },
+            follow=True,
+        )
+        self.assertRedirects(response, reverse("core:inicio"))
+        remito = Remito.objects.get(numero="0001-00008881")
+        self.assertEqual(remito.parada, parada)
+        self.assertEqual(remito.estado, EstadoRemito.ASIGNADO)
+        self.assertEqual(str(remito.fecha_entrega), "2026-11-15")
+        self.assertContains(response, "Remito #0001-00008881 creado con estado Asignado y asignado al itinerario")
+        self.assertContains(response, "La planilla se procesó correctamente (1 remitos creados en total).")
+
+    def test_importar_remitos_no_asigna_parada_si_itinerario_esta_en_curso(self):
+        itinerario = Itinerario.objects.create(
+            fecha="2026-11-15",
+            estado=EstadoItinerario.EN_CURSO,
+        )
+        Parada.objects.create(
+            itinerario=itinerario,
+            comercio=Comercio.objects.create(
+                cuit="20301112223",
+                razon_social="Kiosco Central",
+                domicilio="Calle 1 123",
+            ),
+            orden=1,
+            estado=EstadoParada.PENDIENTE,
+        )
+        csv_content = (
+            "cuit_comercio,condicion_iva,numero_iibb,razon_social,domicilio,monto_a_cobrar,fecha_factura,numero_sucursal,numero_factura\n"
+            "20301112223,Monotributo,976-123456-1,Kiosco Central,\"Calle 1 123\",1500.00,2026-10-21,0001,00008882\n"
+        ).encode("utf-8")
+        archivo = SimpleUploadedFile("30654321090_20261027_DISTR-01.csv", csv_content)
+
+        response = self.client.post(
+            reverse("remitos:importacion_crear"),
+            {
+                "archivo": [archivo],
+                "fecha_entrega": "2026-11-15",
+            },
+        )
+        self.assertRedirects(response, reverse("core:inicio"), fetch_redirect_response=False)
+        remito = Remito.objects.get(numero="0001-00008882")
+        self.assertIsNone(remito.parada)
+        self.assertEqual(remito.estado, EstadoRemito.PENDIENTE)

@@ -57,6 +57,7 @@ class RemitoForm(forms.ModelForm):
             "marca",
             "comercio",
             "total",
+            "fecha_entrega",
         ]
         widgets = {
             "numero": forms.TextInput(
@@ -70,6 +71,12 @@ class RemitoForm(forms.ModelForm):
                     "placeholder": "Total a cobrar por el transportista",
                     "step": "0.01",
                     "min": "0.01",
+                }
+            ),
+            "fecha_entrega": forms.DateInput(
+                attrs={
+                    "class": "form-control",
+                    "type": "date",
                 }
             ),
         }
@@ -101,17 +108,21 @@ class ImportacionRemitosForm(forms.ModelForm):
         label="Archivos",
         help_text="Puede seleccionar uno o varios archivos.",
     )
+    fecha_entrega = forms.DateField(
+        label="Fecha de entrega",
+        required=True,
+        widget=forms.DateInput(
+            attrs={
+                "class": "form-control",
+                "type": "date",
+            }
+        ),
+        help_text="Fecha de entrega para los remitos de esta importación.",
+    )
 
     class Meta:
         model = ImportacionRemitos
-        fields = ["archivo", "marca"]
-        widgets = {
-            "marca": forms.Select(attrs={"class": "form-select"}),
-        }
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.fields["marca"].required = False
+        fields = ["archivo"]
 
 
 class ComercioForm(forms.ModelForm):

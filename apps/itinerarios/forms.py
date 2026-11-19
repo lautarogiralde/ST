@@ -36,6 +36,31 @@ class CrearItinerariosForm(forms.Form):
             .order_by("usuario__last_name", "usuario__first_name", "usuario__id")
         )
 
+    def clean(self):
+        cleaned_data = super().clean()
+        fecha = cleaned_data.get("fecha")
+        transportistas = cleaned_data.get("transportistas")
+
+        if fecha and transportistas:
+            existentes = (
+                Itinerario.objects.filter(
+                    fecha=fecha,
+                    transportista__in=transportistas,
+                )
+                .select_related("transportista__usuario")
+            )
+            if existentes.exists():
+                nombres = [
+                    itin.transportista.usuario.get_full_name() or itin.transportista.usuario.username
+                    for itin in existentes
+                ]
+                self.add_error(
+                    "transportistas",
+                    f"El transportista {', '.join(nombres)} ya posee un itinerario asignado para la fecha {fecha}."
+                )
+
+        return cleaned_data
+
 
 class CrearParadasForm(forms.Form):
     itinerario = forms.ModelChoiceField(

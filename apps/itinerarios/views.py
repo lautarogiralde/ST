@@ -469,9 +469,9 @@ class EliminarItinerario(LoginRequiredMixin, PermissionRequiredMixin, View):
             messages.error(request, "Itinerario no encontrado")
             return redirect("itinerarios:itinerario_lista")
 
-        if itinerario.estado == EstadoItinerario.FINALIZADO:
+        if itinerario.estado in [EstadoItinerario.FINALIZADO, EstadoItinerario.EN_CURSO]:
             messages.error(
-                request, "No se puede eliminar un itinerario finalizado."
+                request, "No se puede eliminar un itinerario en curso o finalizado."
             )
             return redirect("itinerarios:itinerario_lista")
 

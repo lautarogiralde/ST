@@ -19,7 +19,7 @@ from django.views.generic import (
     UpdateView,
 )
 
-from apps.itinerarios.models import EstadoParada, Parada
+from apps.itinerarios.models import EstadoItinerario, EstadoParada, Parada
 
 from .forms import (
     ComercioForm,
@@ -46,17 +46,33 @@ class CrearRemito(LoginRequiredMixin, PermissionRequiredMixin, CreateView):
 
     def form_valid(self, form):
         comercio = form.cleaned_data.get("comercio")
-        parada_existente = Parada.objects.filter(
-            comercio=comercio,
-            estado=EstadoParada.PENDIENTE,
-        ).first()
+        fecha_entrega = form.cleaned_data.get("fecha_entrega")
+
+        parada_existente = None
+        if fecha_entrega:
+            parada_existente = Parada.objects.filter(
+                comercio=comercio,
+                estado=EstadoParada.PENDIENTE,
+                itinerario__fecha=fecha_entrega,
+                itinerario__estado=EstadoItinerario.ASIGNADO,
+            ).first()
 
         if parada_existente:
             form.instance.parada = parada_existente
             form.instance.estado = EstadoRemito.ASIGNADO
+            itin = parada_existente.itinerario
+            codigo_itinerario = f"IT-{itin.fecha.strftime('%Y')}-{itin.id:05d}"
+            messages.success(
+                self.request,
+                f"Remito #{form.instance.numero} creado con estado Asignado y asignado al itinerario {codigo_itinerario} (estado: {itin.get_estado_display()}).",
+            )
         else:
             form.instance.parada = None
             form.instance.estado = EstadoRemito.PENDIENTE
+            messages.success(
+                self.request,
+                f"Remito #{form.instance.numero} creado con estado Pendiente.",
+            )
 
         return super().form_valid(form)
 
@@ -159,7 +175,7 @@ class ImportarRemitos(LoginRequiredMixin, PermissionRequiredMixin, CreateView):
 
     def form_valid(self, form):
         archivos = self.request.FILES.getlist("archivo")
-        marca_seleccionada = form.cleaned_data.get("marca")
+        fecha_entrega = form.cleaned_data.get("fecha_entrega")
 
         creados = 0
         total_remitos_creados = 0
@@ -171,8 +187,6 @@ class ImportarRemitos(LoginRequiredMixin, PermissionRequiredMixin, CreateView):
             cuit_marca = nombre_archivo.split("_")[0].strip()
 
             marca = Marca.objects.filter(cuit=cuit_marca).first()
-            if not marca:
-                marca = marca_seleccionada
 
             if not marca:
                 errores.append(
@@ -221,19 +235,7 @@ class ImportarRemitos(LoginRequiredMixin, PermissionRequiredMixin, CreateView):
                 errores_filas = []
                 datos_validados = []
                 numeros_en_archivo = set()
-
-                # Extraer CUITs válidos del archivo para consultar cuáles ya existen en la base de datos
-                cuits_en_filas = set()
-                for row in filas:
-                    cuit = (row.get("cuit_comercio") or "").strip()
-                    if cuit.isdigit() and len(cuit) == 11:
-                        cuits_en_filas.add(cuit)
-
-                cuits_existentes_db = set(
-                    Comercio.objects.filter(cuit__in=cuits_en_filas).values_list(
-                        "cuit", flat=True
-                    )
-                )
+                cuits_en_archivo = set()
 
                 for fila_num, row in enumerate(filas, start=2):
                     cuit_comercio = (row.get("cuit_comercio") or "").strip()
@@ -251,10 +253,6 @@ class ImportarRemitos(LoginRequiredMixin, PermissionRequiredMixin, CreateView):
                     ):
                         motivos.append(
                             "CUIT del comercio inválido (debe tener 11 dígitos numéricos)"
-                        )
-                    elif cuit_comercio not in cuits_existentes_db and not razon_social:
-                        motivos.append(
-                            "La razón social es obligatoria para comercios no registrados"
                         )
 
                     total_monto = None
@@ -279,8 +277,10 @@ class ImportarRemitos(LoginRequiredMixin, PermissionRequiredMixin, CreateView):
                     if motivos:
                         errores_filas.append((fila_num, "; ".join(motivos)))
                     else:
+                        cuits_en_archivo.add(cuit_comercio)
                         datos_validados.append(
                             {
+                                "fila_num": fila_num,
                                 "cuit_comercio": cuit_comercio,
                                 "razon_social": razon_social,
                                 "domicilio": domicilio,
@@ -289,19 +289,34 @@ class ImportarRemitos(LoginRequiredMixin, PermissionRequiredMixin, CreateView):
                             }
                         )
 
+                # PASO 2: Validar contra la BD (solo si no hubo errores de formato iniciales)
                 if not errores_filas and datos_validados:
-                    existentes = set(
+                    comercios_existentes = {
+                        c.cuit: c
+                        for c in Comercio.objects.filter(cuit__in=cuits_en_archivo)
+                    }
+                    remitos_existentes = set(
                         Remito.objects.filter(
                             marca=marca,
                             numero__in=numeros_en_archivo,
                         ).values_list("numero", flat=True)
                     )
-                    if existentes:
-                        for idx, d in enumerate(datos_validados, start=2):
-                            if d["numero"] in existentes:
-                                errores_filas.append(
-                                    (idx, "El número de remito debe ser único por marca proveedora.")
-                                )
+
+                    for d in datos_validados:
+                        motivos_bd = []
+                        cuit = d["cuit_comercio"]
+                        # Si no existe en BD, es obligatorio que tenga razón social y domicilio
+                        if cuit not in comercios_existentes:
+                            if not d["razon_social"]:
+                                motivos_bd.append("La razón social es obligatoria para comercios no registrados")
+                            if not d["domicilio"]:
+                                motivos_bd.append("El domicilio es obligatorio para comercios no registrados")
+
+                        if d["numero"] in remitos_existentes:
+                            motivos_bd.append("El número de remito debe ser único por marca proveedora.")
+
+                        if motivos_bd:
+                            errores_filas.append((d["fila_num"], "; ".join(motivos_bd)))
 
                 archivo.seek(0)
 
@@ -330,19 +345,13 @@ class ImportarRemitos(LoginRequiredMixin, PermissionRequiredMixin, CreateView):
                             f"Importación rechazada: se detectaron {len(errores_filas)} errores en las filas observadas de {nombre_archivo}. Corrija el archivo e intente nuevamente."
                         )
                     else:
-                        # 1. Obtener comercios existentes y crear los que falten en bloque
-                        cuits_en_archivo = {d["cuit_comercio"] for d in datos_validados}
-                        comercios_existentes = {
-                            c.cuit: c
-                            for c in Comercio.objects.filter(cuit__in=cuits_en_archivo)
-                        }
-
+                        # 1. Crear en bloque comercios nuevos que falten
                         comercios_a_crear = []
-                        cuits_por_crear = set()
+                        cuits_creados = set()
                         for d in datos_validados:
                             cuit = d["cuit_comercio"]
-                            if cuit not in comercios_existentes and cuit not in cuits_por_crear:
-                                cuits_por_crear.add(cuit)
+                            if cuit not in comercios_existentes and cuit not in cuits_creados:
+                                cuits_creados.add(cuit)
                                 comercios_a_crear.append(
                                     Comercio(
                                         cuit=cuit,
@@ -353,30 +362,61 @@ class ImportarRemitos(LoginRequiredMixin, PermissionRequiredMixin, CreateView):
                                 )
 
                         if comercios_a_crear:
-                            Comercio.objects.bulk_create(comercios_a_crear, batch_size=1000)
-                            for c in Comercio.objects.filter(cuit__in=cuits_por_crear):
+                            Comercio.objects.bulk_create(comercios_a_crear, batch_size=10)
+                            for c in Comercio.objects.filter(cuit__in=cuits_creados):
                                 comercios_existentes[c.cuit] = c
 
-                        # 2. Crear todos los remitos del lote en bloque
-                        remitos_a_crear = [
-                            Remito(
-                                numero=d["numero"],
-                                marca=marca,
-                                comercio=comercios_existentes[d["cuit_comercio"]],
-                                total=d["total"],
-                                estado=EstadoRemito.PENDIENTE,
-                                parada=None,
-                                importacion=importacion,
-                            )
-                            for d in datos_validados
-                        ]
+                        # 2. Buscar paradas pendientes existentes para la misma fecha_entrega con itinerario ASIGNADO
+                        paradas_candidatas = {
+                            p.comercio_id: p
+                            for p in Parada.objects.filter(
+                                comercio__cuit__in=cuits_en_archivo,
+                                estado=EstadoParada.PENDIENTE,
+                                itinerario__fecha=fecha_entrega,
+                                itinerario__estado=EstadoItinerario.ASIGNADO,
+                            ).select_related("itinerario")
+                        }
 
-                        Remito.objects.bulk_create(remitos_a_crear, batch_size=1000)
+                        # 3. Crear remitos del lote en bloque y notificar asignaciones automáticas
+                        remitos_a_crear = []
+                        remitos_asignados_info = []
+
+                        for d in datos_validados:
+                            comercio_obj = comercios_existentes[d["cuit_comercio"]]
+                            parada_asignada = paradas_candidatas.get(comercio_obj.id)
+                            estado_remito = (
+                                EstadoRemito.ASIGNADO
+                                if parada_asignada
+                                else EstadoRemito.PENDIENTE
+                            )
+                            remitos_a_crear.append(
+                                Remito(
+                                    numero=d["numero"],
+                                    marca=marca,
+                                    comercio=comercio_obj,
+                                    total=d["total"],
+                                    fecha_entrega=fecha_entrega,
+                                    estado=estado_remito,
+                                    parada=parada_asignada,
+                                    importacion=importacion,
+                                )
+                            )
+                            if parada_asignada:
+                                itin = parada_asignada.itinerario
+                                codigo_itin = f"IT-{itin.fecha.strftime('%Y')}-{itin.id:05d}"
+                                remitos_asignados_info.append(
+                                    f"Remito #{d['numero']} creado con estado Asignado y asignado al itinerario {codigo_itin}."
+                                )
+
+                        Remito.objects.bulk_create(remitos_a_crear, batch_size=100)
                         remitos_creados_lote = len(remitos_a_crear)
 
                         importacion.cantidad = remitos_creados_lote
                         importacion.estado = EstadoImportacion.EXITO
                         importacion.save(update_fields=["cantidad", "estado"])
+
+                        for msg_asignado in remitos_asignados_info:
+                            messages.success(self.request, msg_asignado)
 
                         creados += 1
                         total_remitos_creados += remitos_creados_lote
@@ -396,12 +436,12 @@ class ImportarRemitos(LoginRequiredMixin, PermissionRequiredMixin, CreateView):
             if creados == 1:
                 messages.success(
                     self.request,
-                    f"La planilla se procesó correctamente ({total_remitos_creados} remitos pendientes creados).",
+                    f"La planilla se procesó correctamente ({total_remitos_creados} remitos creados en total).",
                 )
             else:
                 messages.success(
                     self.request,
-                    f"Se procesaron correctamente {creados} planillas ({total_remitos_creados} remitos pendientes creados en total).",
+                    f"Se procesaron correctamente {creados} planillas ({total_remitos_creados} remitos creados).",
                 )
 
         if creados == 0 and not lotes_guardados and errores:
