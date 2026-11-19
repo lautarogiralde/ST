@@ -469,3 +469,52 @@ class ItinerariosModelTests(TestCase):
             str(problema),
             "Problema [Otro problema] - Parada #1 (Comercio de prueba)",
         )
+
+    def test_unique_transportista_fecha_constraint(self):
+        user_model = get_user_model()
+        user = user_model.objects.create_user(
+            username="33333333",
+            password="Testing-Password-123!",
+        )
+        vehiculo = Vehiculo.objects.create(patente="CC123DD")
+        transportista = Transportista.objects.create(
+            usuario=user,
+            vehiculo=vehiculo,
+        )
+        Itinerario.objects.create(
+            fecha=date(2026, 11, 20),
+            transportista=transportista,
+            vehiculo=vehiculo,
+            estado=EstadoItinerario.ASIGNADO,
+        )
+
+        with self.assertRaises(Exception):
+            Itinerario.objects.create(
+                fecha=date(2026, 11, 20),
+                transportista=transportista,
+                vehiculo=vehiculo,
+                estado=EstadoItinerario.ASIGNADO,
+            )
+
+    def test_crear_itinerarios_valida_itinerario_existente(self):
+        user_model = get_user_model()
+        user = user_model.objects.create_user(
+            username="55555555",
+            password="Testing-Password-123!",
+        )
+        vehiculo = Vehiculo.objects.create(patente="DD123EE")
+        transportista = Transportista.objects.create(
+            usuario=user,
+            vehiculo=vehiculo,
+        )
+        Itinerario.objects.create(
+            fecha=date(2026, 11, 21),
+            transportista=transportista,
+            vehiculo=vehiculo,
+            estado=EstadoItinerario.ASIGNADO,
+        )
+
+        from apps.itinerarios.services import crear_itinerarios
+        with self.assertRaises(ValidationError) as ctx:
+            crear_itinerarios([transportista], date(2026, 11, 21))
+        self.assertIn("ya posee un itinerario asignado", str(ctx.exception))

@@ -18,6 +18,23 @@ def crear_itinerarios(
     if not transportistas:
         raise ValidationError("Seleccioná al menos un transportista.")
 
+    # Validar que ningún transportista ya tenga un itinerario asignado para esa fecha
+    existentes = (
+        Itinerario.objects.filter(
+            fecha=fecha,
+            transportista__in=transportistas,
+        )
+        .select_related("transportista__usuario")
+    )
+    if existentes.exists():
+        nombres = [
+            itin.transportista.usuario.get_full_name() or itin.transportista.usuario.username
+            for itin in existentes
+        ]
+        raise ValidationError(
+            f"El transportista {', '.join(nombres)} ya posee un itinerario asignado para la fecha {fecha}."
+        )
+
     itinerarios = []
     for transportista in transportistas:
         if transportista.vehiculo_id is None:
